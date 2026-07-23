@@ -1,5 +1,14 @@
 ## Unreleased
 
+## v68.5.0 (2026-07-23)
+
+### Added
+- **Post-break video-wedge recovery** — detects the "audio running, video frozen after an ad break" wedge (most often noticed after switching tabs and coming back): the playhead keeps *advancing* because the audio clock is alive, while the decoder stops emitting new frames — a signature that the existing `currentTime`-based freeze checks are structurally blind to (they only catch a playhead that *stops*). A bounded watch is armed on the ad→no-ad transition; each buffer-monitor tick where `currentTime` advanced but `getVideoPlaybackQuality().totalVideoFrames` did not counts as evidence, and sustained evidence escalates a pause/play nudge, then a hard reload if it recurs. Reload-boundary frame-counter resets are treated as a re-baseline (not a false wedge), and a few healthy frame ticks disarm the watch. Mirrors GosuDRM/TTV-AB v12.0.0. Default on; disable via `twitchAdSolutions_disablePostBreakWedge='true'`. vaft only (#251)
+
+### Fixed
+- **AV1 enhanced-stream ad-break black screen** — the HEVC codec-swap put AV1 (`av0*`) in its *safe* swap-target pool and only triggered when an `hev`/`hvc` variant was present, so a native-AV1 1440p "enhanced" stream never had its codec rewritten and could go black for the entire ad break — and a HEVC stream could even be swapped *to* an equally-undecodable AV1 variant. AV1 is now classed as "enhanced" alongside HEVC: swap targets are AVC-only, and *any* enhanced variant (HEVC or AV1) triggers the swap. Enhanced-only streams (no AVC to swap to) are left untouched, matching the upstream all-enhanced short-circuit. Mirrors GosuDRM/TTV-AB v12.0.9 (`_isEnhancedCodecString` / `_stripHevcBackupVariants`, issue GosuDRM/TTV-AB #47). Pure correctness fix — no new flag; the existing `SkipPlayerReloadOnHevc` opt-out still gates the swap. vaft only (#251)
+- **Desktop post-ad black-screen + play-icon stall on no-strip breaks** — issue #129. When an ad break stripped *no* segments (a `BackupSwapFirst` CSAI swap), nothing was injected into the MediaSource, yet the post-ad reload still ran as a *hard* reload — re-instantiating the media element and producing the desktop black frame + native play-icon teardown some users report. The post-ad reload now uses a soft reload (`kind: 'post-ad'`) on no-strip breaks and keeps the hard reload (`kind: 'early'`) only when strip activity (BLANK_MP4 / recovery injection) actually needs the MediaSource flush; mid-break freeze/gap escapes are unaffected (they still hard-reload). Default on; opt out via `twitchAdSolutions_softReloadNoStrip='false'`. vaft only (#251)
+
 ## v68.4.0 (2026-06-06)
 
 ### Fixed
