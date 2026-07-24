@@ -2,13 +2,14 @@ name: Bug Report
 description: Report an issue with TwitchAdSolutions
 labels: ["bug"]
 body:
-  - type: markdown
+  - type: checkboxes
+    id: prechecks
     attributes:
-      value: |
-        **Before submitting, please check:**
-        - [ ] I am using the latest version (not a permalink)
-        - [ ] I have restarted my browser / disabled and re-enabled uBlock Origin
-        - [ ] I have checked [Known Extension Conflicts](https://github.com/ryanbr/TwitchAdSolutions/blob/master/README.md#known-extension-conflicts) — 7TV, TTV-AB, Purple AdBlock, and TwitchNoSub are known to cause issues
+      label: Before submitting, please check
+      options:
+        - label: I am using the latest version (not a permalink)
+        - label: I have restarted my browser / disabled and re-enabled uBlock Origin
+        - label: I have checked [Known Extension Conflicts](https://github.com/ryanbr/TwitchAdSolutions/blob/master/README.md#known-extension-conflicts) — 7TV, TTV-AB, Purple AdBlock, and TwitchNoSub are known to cause issues
 
   - type: dropdown
     id: script
@@ -20,6 +21,15 @@ body:
         - video-swap-new (userscript)
         - video-swap-new (uBlock Origin)
         - strip (userscript)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Script version
+      description: "Open the browser console (F12) — the script logs it at load, e.g. `[AD DEBUG] TwitchAdSolutions vaft v86 loading`. Otherwise check your userscript manager or uBlock filter list."
+      placeholder: "e.g. vaft v86 (68.5.0)"
     validations:
       required: true
 
