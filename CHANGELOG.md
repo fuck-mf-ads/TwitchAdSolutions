@@ -1,5 +1,10 @@
 ## Unreleased
 
+## v68.5.1 (2026-07-23)
+
+### Fixed
+- **Audio left muted when the hard-reload pre-mute lands on a different `<video>` element** — the pre-mute sets `muted = true` on `document.querySelector('video')`, but `restore()` and the 5500ms backstop **re-query** `document.querySelector('video')` rather than reusing that reference. The re-query is deliberate and necessary (`setSrc({isNewMediaPlayerInstance:true})` replaces the element, so the original reference is dead), but it returns whichever `<video>` is *first in the DOM* — not necessarily the one that was muted. When those diverge, vaft unmutes one element and leaves its mute on another, so the video actually being watched stays silent. Two things make the mismatch likely now: Twitch has started rendering **extra `<video>` elements** for its new separate side/chat video ads (see #249), so `querySelector('video')` can resolve to an ad element; and **Firefox's Picture-in-Picture is browser-native and never sets `document.pictureInPictureElement`**, so the PiP reload-guard in `doTwitchPlayerTask` silently never fires there — Firefox PiP users get the hard reload (and therefore the pre-mute) that Chrome PiP users are shielded from, which is why it surfaced as "randomly muting while in PiP mode". Fix: `restore()` and the backstop now also clear the mute on the element that was *actually* pre-muted, if it is still connected and still muted. Gated on `wasInitiallyUnmuted` so it only ever clears a mute vaft itself set — it can never unmute an ad video — and it is a no-op on the normal hard-reload path, where the old element is disconnected. Emits an explicit `cleared leaked pre-mute` debug line so the leak is visible in field logs. Does **not** attempt to detect Firefox PiP (not reliably possible from page context); this only guarantees audio is never left muted. vaft only (#248, #253)
+
 ## v68.5.0 (2026-07-23)
 
 ### Added
