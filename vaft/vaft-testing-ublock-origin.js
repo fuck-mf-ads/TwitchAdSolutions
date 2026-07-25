@@ -37,7 +37,7 @@ twitch-videoad.js text/javascript
         }
     }
     'use strict';
-    const ourTwitchAdSolutionsVersion = 668;// Used to prevent conflicts with outdated versions of the scripts
+    const ourTwitchAdSolutionsVersion = 669;// Used to prevent conflicts with outdated versions of the scripts
     console.log('[AD DEBUG] TwitchAdSolutions vaft-testing v' + ourTwitchAdSolutionsVersion + ' loading');
     if (typeof window.twitchAdSolutionsVersion !== 'undefined' && window.twitchAdSolutionsVersion >= ourTwitchAdSolutionsVersion) {
         console.log('[AD DEBUG] CONFLICT: vaft-testing v' + ourTwitchAdSolutionsVersion + ' skipped — another script already active (v' + window.twitchAdSolutionsVersion + '). Remove duplicate scripts.');
@@ -2202,6 +2202,36 @@ twitch-videoad.js text/javascript
                     loggedSdaHide = true;
                     console.log('[AD DEBUG] Hidden Twitch stream display ad');
                 }
+            }
+        }
+        // Separate video-ad guard (mirrors GosuDRM/TTV-AB v12.0.1-12.0.8 — issue #249): since
+        // July 2026 Twitch renders standalone <video> ad elements beside the player and in chat
+        // — a second "player" with a Play-ad button. They are delivered outside the m3u8, so
+        // neither segment stripping nor backup-swapping touches them.
+        // Matched ONLY on the Amazon ad-CDN host. That is the safety property: the live stream is
+        // fed by MediaSource and always carries a blob: URL, so the primary player can never match
+        // this test. The player-owned element is skipped as a second, independent guard.
+        // Muted + paused as well as hidden — a display:none <video> still plays audio (TTV-AB v12.0.7).
+        const primaryVideo = playerForMonitoringBuffering?.player?.getHTMLVideoElement?.();
+        const allVideos = document.getElementsByTagName('video');
+        for (let i = 0; i < allVideos.length; i++) {
+            const vid = allVideos[i];
+            if (vid === primaryVideo || vid.dataset.tasAdHidden) continue;
+            let adHost = '';
+            try {
+                const vidSrc = vid.currentSrc || vid.getAttribute('src') || '';
+                if (vidSrc && !vidSrc.startsWith('blob:')) {
+                    const host = new URL(vidSrc, document.location.href).hostname.toLowerCase();
+                    if (host === 'media-amazon.com' || host.endsWith('.media-amazon.com')) {
+                        adHost = host;
+                    }
+                }
+            } catch {}
+            if (adHost) {
+                vid.dataset.tasAdHidden = '';
+                try { vid.muted = true; vid.pause(); } catch {}
+                vid.style.setProperty('display', 'none', 'important');
+                console.log('[AD DEBUG] Hidden separate Twitch video ad (' + adHost + ') — issue #249');
             }
         }
     }
