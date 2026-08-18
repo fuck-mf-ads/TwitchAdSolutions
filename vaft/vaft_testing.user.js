@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TwitchAdSolutions (vaft-testing)
 // @namespace    https://github.com/ryanbr/TwitchAdSolutions
-// @version      671.0.0
+// @version      672.0.0
 // @description  Multiple solutions for blocking Twitch ads (vaft testing variant)
 // @updateURL    https://github.com/ryanbr/TwitchAdSolutions/raw/master/vaft/vaft_testing.user.js
 // @downloadURL  https://github.com/ryanbr/TwitchAdSolutions/raw/master/vaft/vaft_testing.user.js
@@ -48,7 +48,7 @@
         }
     }
     'use strict';
-    const ourTwitchAdSolutionsVersion = 671;// Used to prevent conflicts with outdated versions of the scripts
+    const ourTwitchAdSolutionsVersion = 672;// Used to prevent conflicts with outdated versions of the scripts
     console.log('[AD DEBUG] TwitchAdSolutions vaft-testing v' + ourTwitchAdSolutionsVersion + ' loading');
     if (typeof window.twitchAdSolutionsVersion !== 'undefined' && window.twitchAdSolutionsVersion >= ourTwitchAdSolutionsVersion) {
         console.log('[AD DEBUG] CONFLICT: vaft-testing v' + ourTwitchAdSolutionsVersion + ' skipped — another script already active (v' + window.twitchAdSolutionsVersion + '). Remove duplicate scripts.');
@@ -95,6 +95,7 @@
         scope.DisableInAdGapSeek = false;// In-ad frozen-buffer-gap seek (mirrors TTV-AB #33). Default on. Set twitchAdSolutions_disableInAdGapSeek=true to turn it OFF (for A/B isolation of mid-break pause/loading-circle reports).
         scope.DisableInAdFreezeReload = false;// In-ad frozen-playhead reload escalation — readyState-independent backstop for audio-gap CSAI freezes the gap-seek can't catch (observed ~60s stalls). Default on. Set twitchAdSolutions_disableInAdFreezeReload=true to turn it OFF.
         scope.DisablePostBreakWedge = false;// Post-break video-wedge recovery (mirrors GosuDRM/TTV-AB _checkPostBreakWedge, v12.0.0). Detects "audio running, video frozen" after an ad break — playhead advancing while the decoder emits no new frames — via getVideoPlaybackQuality().totalVideoFrames, which the currentTime-based freeze checks can't see. Default on. Set twitchAdSolutions_disablePostBreakWedge=true to turn it OFF.
+        scope.DisableBackgroundResume = false;// Issue #255: resume a Twitch-initiated pause while the tab is hidden (retry chain, strike-capped so a deliberate media-key pause is respected). Default on. Set twitchAdSolutions_disableBackgroundResume=true to turn it OFF.
         scope.SkipPlayerReloadOnHevc = false;// If true this will skip player reload on streams which have 2k/4k quality (if you enable this and you use the 2k/4k quality setting you'll get error #4000 / #3000 / spinning wheel on chrome based browsers)
         scope.AlwaysReloadPlayerOnAd = false;// Always pause/play when entering/leaving ads
         scope.ReloadPlayerAfterAd = true;// After the ad finishes do a player reload instead of pause/play
@@ -1791,6 +1792,55 @@
         lastFixTime: 0,
         isLive: true
     };
+    // play() hands back a promise whose rejection tells apart the browser refusing the call
+    // (NotAllowedError — autoplay policy on a backgrounded tab) from a play() that went through
+    // while the player stayed paused anyway. Log it instead of dropping it (issue #255).
+    function playPlayer(target, context) {
+        try {
+            return target.play()?.catch?.((err) => console.log('[AD DEBUG] play() rejected after ' + context + ': ' + (err?.name || err)));
+        } catch (err) {
+            console.log('[AD DEBUG] play() threw after ' + context + ': ' + (err?.name || err));
+        }
+    }
+    // Issue #255: with real visibility exposed (spoof removed in the TTV-AB v6.5.0 sync), Twitch
+    // pauses hidden tabs at ad time and nothing resumed them until tab focus — background
+    // listeners lost audio for the rest of the break. Resume with a short retry chain (shaped
+    // like TTV-AB's hidden-tab resume guard; browser throttling stretches the delays, which is
+    // fine). A pause while hidden can't be the player's pause button, but it CAN be a media key —
+    // the strike cap stops us fighting a deliberate media-key pause.
+    const backgroundResumeState = {
+        timers: [],
+        chains: 0,// resume chains fired during the current hidden period
+        loggedGiveUp: false
+    };
+    const BackgroundResumeRetryDelaysMs = [150, 600, 1800, 4000];
+    const BackgroundResumeMaxChains = 2;// paused-again strikes while hidden before treating it as deliberate
+    function clearBackgroundResumeTimers() {
+        for (const t of backgroundResumeState.timers) clearTimeout(t);
+        backgroundResumeState.timers = [];
+    }
+    function scheduleBackgroundResume(video) {
+        if (backgroundResumeState.chains >= BackgroundResumeMaxChains) {
+            if (!backgroundResumeState.loggedGiveUp) {
+                backgroundResumeState.loggedGiveUp = true;
+                console.log('[AD DEBUG] Hidden-tab pause persisted after ' + BackgroundResumeMaxChains + ' resume chains — treating as deliberate (media-key) pause, backing off until tab focus');
+            }
+            playerBufferState.userPauseIntent = true;// let the rest of the script respect it too
+            return;
+        }
+        backgroundResumeState.chains++;
+        clearBackgroundResumeTimers();
+        console.log('[AD DEBUG] Twitch paused a hidden tab (ad-time background pause, issue #255) — resuming (chain ' + backgroundResumeState.chains + '/' + BackgroundResumeMaxChains + ')');
+        playPlayer(video, 'hidden-tab pause');
+        for (const delay of BackgroundResumeRetryDelaysMs) {
+            backgroundResumeState.timers.push(setTimeout(() => {
+                if (!document.hidden) return;// the tab-focus handler owns the visible side
+                if (video.isConnected && video.paused && !video.ended) {
+                    playPlayer(video, 'hidden-tab resume retry');
+                }
+            }, delay));
+        }
+    }
     // Poll the player state to detect and fix buffering caused by ad stream switching
     function monitorPlayerBuffering() {
         // Always reschedule the next tick, even if the body throws — a single unexpected
@@ -1813,9 +1863,16 @@
                 if (video && !video.__tasIntentHooked) {
                     video.__tasIntentHooked = true;
                     video.addEventListener('pause', () => {
-                        if (!playerBufferState.weJustPaused || (Date.now() - playerBufferState.weJustPaused) > 2000) {
-                            playerBufferState.userPauseIntent = true;
+                        if (playerBufferState.weJustPaused && (Date.now() - playerBufferState.weJustPaused) <= 2000) {
+                            return;// our own pause (pause/play fix, MSE-teardown) — not user intent
                         }
+                        if (document.hidden && !DisableBackgroundResume) {
+                            // A hidden-tab pause can't be the player's pause button — it's Twitch
+                            // pausing a background tab at ad time (issue #255), not user intent.
+                            scheduleBackgroundResume(video);
+                            return;
+                        }
+                        playerBufferState.userPauseIntent = true;
                     });
                     video.addEventListener('play', () => {
                         playerBufferState.userPauseIntent = false;
@@ -2424,7 +2481,7 @@
             }
             // If WE recently called pause/play and player is still paused, retry play (stuck from autoplay policy or ad-state interference)
             if (playerBufferState.weJustPaused && (Date.now() - playerBufferState.weJustPaused) < 10000) {
-                try { player.play()?.catch?.(() => {}); } catch {}
+                try { playPlayer(player, 'resume retry'); } catch {}
             }
             return;
         }
@@ -2435,7 +2492,7 @@
         playerBufferState.numSame = 0;
         if (isPausePlay) {
             player.pause();
-            player.play()?.catch?.(() => {});
+            playPlayer(player, 'pause/play fix');
             playerBufferState.weJustPaused = Date.now();
             return;
         }
@@ -2596,12 +2653,12 @@
             postTwitchWorkerMessage('TriggeredPlayerReload');
             // Resume playback with retry — only if user hadn't manually paused
             if (!wasPaused) {
-                player.play()?.catch?.(() => {});
+                playPlayer(player, 'reload');
                 // Retry resume if play() didn't take effect
                 setTimeout(() => {
                     try {
                         if (player.isPaused() && !player.core?.paused) {
-                            player.play()?.catch?.(() => {});
+                            playPlayer(player, 'post-reload resume retry');
                         }
                     } catch {}
                 }, 1500);
@@ -2761,10 +2818,12 @@
         // Resume the player on tab focus if Twitch paused it during an ad on a hidden tab.
         // Previously also spoofed document.hidden / visibilityState / hasFocus and swallowed
         // the events on the capture phase. That broke other extensions that key off real
-        // visibility (e.g. BetterTTV "Mute Invisible Player"). Resume-on-focus alone is
-        // enough to keep playback alive across hidden→visible transitions during ads.
-        // Sync'd with TTV-AB v6.5.0.
+        // visibility (e.g. BetterTTV "Mute Invisible Player"). Sync'd with TTV-AB v6.5.0.
+        // Issue #255 hardening: the hidden side now has its own resume guard (see
+        // scheduleBackgroundResume), and the focus-side resume is verified — a rejected play()
+        // here used to strand the player paused ("still frozen when I come back").
         let wasVideoPlaying = true;
+        const focusResumeTimers = [];
         const visibilityChange = () => {
             const videos = document.getElementsByTagName('video');
             if (videos.length === 0) return;
@@ -2772,11 +2831,29 @@
                 wasVideoPlaying = !videos[0].paused && !videos[0].ended;
                 return;
             }
+            // Back to visible: the hidden-side guard is done — reset its strike budget
+            backgroundResumeState.chains = 0;
+            backgroundResumeState.loggedGiveUp = false;
+            clearBackgroundResumeTimers();
+            for (const t of focusResumeTimers) clearTimeout(t);
+            focusResumeTimers.length = 0;
             if (!playerBufferState.hasStreamStarted) {
                 playerBufferState.hasStreamStarted = true;
             }
             if (wasVideoPlaying && !videos[0].ended && videos[0].paused) {
-                videos[0].play()?.catch?.(() => {});
+                // It was playing when the tab went away, so the pause isn't the user's — clear
+                // any misclassified intent before resuming
+                playerBufferState.userPauseIntent = false;
+                console.log('[AD DEBUG] Tab focused with the video paused — resuming (muted: ' + videos[0].muted + ')');
+                playPlayer(videos[0], 'tab focus');
+                for (const delay of [400, 1500]) {
+                    focusResumeTimers.push(setTimeout(() => {
+                        const v = document.getElementsByTagName('video')[0];
+                        if (v && !document.hidden && v.paused && !v.ended && !playerBufferState.userPauseIntent) {
+                            playPlayer(v, 'tab-focus resume retry');
+                        }
+                    }, delay));
+                }
             }
         };
         document.addEventListener('visibilitychange', visibilityChange);
@@ -2894,6 +2971,11 @@
         if (lsDisablePostBreakWedge === 'true') {
             DisablePostBreakWedge = true;
             console.log('[AD DEBUG] Post-break video-wedge recovery DISABLED via localStorage — audio-alive/video-frozen after a break will not be auto-recovered (A/B isolation)');
+        }
+        const lsDisableBackgroundResume = localStorage.getItem('twitchAdSolutions_disableBackgroundResume');
+        if (lsDisableBackgroundResume === 'true') {
+            DisableBackgroundResume = true;
+            console.log('[AD DEBUG] Background resume DISABLED via localStorage — a hidden-tab pause during ads stays paused until tab focus (A/B isolation)');
         }
         const lsHideAdOverlay = localStorage.getItem('twitchAdSolutions_hideAdOverlay');
         if (lsHideAdOverlay === 'true') {

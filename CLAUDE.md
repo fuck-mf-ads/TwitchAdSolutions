@@ -32,7 +32,7 @@ uBlock files have `twitch-videoad.js text/javascript` as line 1 (not valid JS �
 
 ## Versions
 
-Bump `@version` (userscript header) and `ourTwitchAdSolutionsVersion` together for functional changes. Current: vaft 68.4.0/85, video-swap-new 1.86/54, strip 1.9/26. Testing: vaft 666.0.0/666, video-swap-new -/619.
+Bump `@version` (userscript header) and `ourTwitchAdSolutionsVersion` together for functional changes. Current: vaft 68.5.1/87, video-swap-new 1.86/54, strip 1.9/26. Testing: vaft 672.0.0/672, video-swap-new -/619.
 
 ## localStorage Config
 
@@ -50,6 +50,10 @@ All read at init, injected into worker blob:
 - `twitchAdSolutions_fastAutoplayFirstTry` — opt-out (default `true` as of v67.1.0). Prepend autoplay (360p) to position 0 of the iteration when the prior break committed autoplay via PreferLowQualityBackup escape hatch. Saves ~1.5-2s of probe-loop buffering. Auto-resets when a Source-tier type wins (channel recovered) so quality returns to full automatically. Set to `'false'` to force full Source-tier probe on every break (vaft only)
 - `twitchAdSolutions_recoverFromSilentMute` — opt-out (default `true`). On hard reload, if the element is already muted but vaft has successfully unmuted at any point earlier this session, recover via the 5500ms backstop (Twitch's silent re-mute pattern — issue #200). Disable via `'false'` if you deliberately mute mid-session and want that preserved across reloads. Users muted from session start are always respected (vaftEverUnmuted=false short-circuits the recovery check). vaft only.
 - `twitchAdSolutions_disableAdSpoofing` — opt-in via `'false'` (default `'true'` — spoofing is OFF). When enabled, on ad detect vaft fires the GQL ad-tracking beacons (`video_ad_impression`, `video_ad_quartile_complete` × 4, `video_ad_pod_complete`) that Twitch's player would have sent if the ad had played normally. Originally intended to mimic the ad-completion signal Twitch expects and may reduce detection escalation — but the always-100%-watched + audible + visible beacon pattern may itself fingerprint as anomalous (silently, without GQL rejection) and trigger detection escalation in the other direction (observed correlation with CSAI ads reaching committed backups + TTV-AB maintainer hypothesis). Default flipped from on→off after v68.2.0. Set to `'false'` to re-enable (for A/B testing whether spoofing affects ad break duration / CSAI escalation on your channels). Failures swallowed (never blocks ad-block flow). vaft only.
+- `twitchAdSolutions_disableInAdGapSeek` — opt-out via `'true'` (default off = feature on). Disables the in-ad frozen-buffer-gap seek (v660, TTV-AB #33 mirror) for A/B isolation of mid-break pause/loading-circle reports. vaft testing only.
+- `twitchAdSolutions_disableInAdFreezeReload` — opt-out via `'true'` (default off = feature on). Disables the in-ad frozen-playhead reload escalation (v662, audio-gap CSAI backstop) for A/B isolation. vaft testing only.
+- `twitchAdSolutions_disablePostBreakWedge` — opt-out via `'true'` (default off = feature on). Disables the post-break video-wedge recovery (v667/v68.5.0, TTV-AB _checkPostBreakWedge mirror) for A/B isolation.
+- `twitchAdSolutions_disableBackgroundResume` — opt-out via `'true'` (default off = feature on). Disables the hidden-tab resume guard (v672, issue #255): a Twitch-initiated pause while the tab is hidden is resumed with a retry chain (strike-capped so a deliberate media-key pause is respected) instead of staying paused until tab focus. vaft testing only.
 
 ## CSAI vs SSAI
 
