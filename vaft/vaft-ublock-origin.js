@@ -1474,7 +1474,7 @@ twitch-videoad.js text/javascript
                     }
                     console.log(`[AD DEBUG] Blocking${(streamInfo.IsMidroll ? ' midroll ' : ' ')}ads (${backupPlayerType}) — backup found in ${Date.now() - backupSearchStart}ms${backupColdTokenFetches > 0 ? ` (cold cache: ${backupColdTokenFetches} token fetch${backupColdTokenFetches > 1 ? 'es' : ''})` : ' (warm cache)'}`);
                     if (streamInfo.EscapeHatchFired) {
-                        const qualityTier = backupPlayerType === 'autoplay' ? '1080p60' : 'Source';
+                        const qualityTier = backupPlayerType === 'autoplay' ? '480p' : 'Source';
                         console.log('[AD DEBUG] Post-escape backup: ' + backupPlayerType + ' (' + qualityTier + ') — recovered from sticky-path freeze');
                     } else if (backupPlayerType === 'autoplay' && PreferLowQualityBackup) {
                         const sourceTried = streamInfo.LoggedBackupAdsByType?.size || 0;
